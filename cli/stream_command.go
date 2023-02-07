@@ -1138,6 +1138,10 @@ func (c *streamCmd) renderReplication(stats []streamStat) {
 				eApiPrefix = source.External.ApiPrefix
 			}
 
+			if source.SubjectTransformDest != "" && source.FilterSubject == "" {
+				source.FilterSubject = ">"
+			}
+
 			if c.reportRaw {
 				table.AddRow(s.Name, "Source", eApiPrefix, source.Name, source.FilterSubject, source.SubjectTransformDest, source.Active, source.Lag, apierr)
 			} else {
