@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.6
 	github.com/HdrHistogram/hdrhistogram-go v1.1.2
-	github.com/choria-io/fisk v0.3.0
+	github.com/choria-io/fisk v0.4.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/emicklei/dot v1.2.0
 	github.com/fatih/color v1.13.0
