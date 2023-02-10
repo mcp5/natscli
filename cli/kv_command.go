@@ -802,10 +802,27 @@ func (c *kvCommand) showStatus(store nats.KeyValue) error {
 		}
 
 		if len(nfo.Sources) > 0 {
-			fmt.Println("\n Sources Information:")
+			fmt.Println("\n  Sources Information:")
 			fmt.Println()
 			for _, source := range nfo.Sources {
 				fmt.Printf("        Source Bucket: %s\n", strings.TrimPrefix(source.Name, "KV_"))
+				fmt.Printf("                  Lag: %s\n", humanize.Comma(int64(source.Lag)))
+				if source.Active > 0 && source.Active < math.MaxInt64 {
+					fmt.Printf("            Last Seen: %v\n", humanizeDuration(source.Active))
+				} else {
+					fmt.Printf("            Last Seen: never\n")
+				}
+
+				if source.External != nil {
+					fmt.Printf("      Ext. API Prefix: %s\n", source.External.APIPrefix)
+					if source.External.DeliverPrefix != "" {
+						fmt.Printf(" Ext. Delivery Prefix: %s\n", source.External.DeliverPrefix)
+					}
+				}
+				if source.Error != nil {
+					fmt.Printf("                     Error: %s\n", source.Error.Description)
+				}
+				fmt.Println()
 			}
 		}
 
