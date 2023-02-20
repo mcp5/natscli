@@ -1109,7 +1109,7 @@ func (c *streamCmd) reportAction(_ *fisk.ParseContext) error {
 
 func (c *streamCmd) renderReplication(stats []streamStat) {
 	table := newTableWriter("Replication Report")
-	table.AddHeaders("Stream", "Kind", "API Prefix", "Source Stream", "Filter", "Destination", "Active", "Lag", "Error")
+	table.AddHeaders("Stream", "Kind", "API Prefix", "Source Stream", "Filter", "Transform", "Active", "Lag", "Error")
 
 	for _, s := range stats {
 		if len(s.Sources) == 0 && s.Mirror == nil {
@@ -1471,9 +1471,6 @@ func (c *streamCmd) interactiveEdit(cfg api.StreamConfig) (api.StreamConfig, err
 }
 
 func (c *streamCmd) editAction(pc *fisk.ParseContext) error {
-	//if (c.repubSource != "" && c.repubDest == "") || (c.repubSource == "" && c.repubDest != "") {
-	//	fisk.Fatalf("must specify both --republish-source and --republish-destination")
-	//}
 
 	c.connectAndAskStream()
 
@@ -1588,13 +1585,7 @@ func (c *streamCmd) showStreamConfig(cfg api.StreamConfig) {
 	if len(cfg.Subjects) > 0 {
 		fmt.Printf("                  Subjects: %s\n", strings.Join(cfg.Subjects, ", "))
 	}
-	if cfg.SubjectTransform != nil && cfg.SubjectTransform.Destination != "" {
-		source := cfg.SubjectTransform.Source
-		if source == "" {
-			source = ">"
-		}
-		fmt.Printf("  Subject Transform Source: %s , Destination: %s\n", source, cfg.SubjectTransform.Destination)
-	}
+
 	fmt.Printf("                  Replicas: %d\n", cfg.Replicas)
 	if cfg.Sealed {
 		fmt.Printf("                    Sealed: true\n")
@@ -1608,17 +1599,18 @@ func (c *streamCmd) showStreamConfig(cfg api.StreamConfig) {
 			fmt.Printf("            Placement Tags: %s\n", strings.Join(cfg.Placement.Tags, ", "))
 		}
 	}
-	if cfg.RePublish != nil {
-		if cfg.RePublish.HeadersOnly {
-			fmt.Printf("      Republishing Headers: %s to %s", cfg.RePublish.Source, cfg.RePublish.Destination)
-		} else {
-			fmt.Printf("              Republishing: %s to %s", cfg.RePublish.Source, cfg.RePublish.Destination)
-		}
-	}
 
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println()
+
+	if cfg.SubjectTransform != nil && cfg.SubjectTransform.Destination != "" {
+		source := cfg.SubjectTransform.Source
+		if source == "" {
+			source = ">"
+		}
+		fmt.Printf("  Subject Transform: '%s' -> '%s'\n", source, cfg.SubjectTransform.Destination)
+	}
 
 	fmt.Printf("                 Retention: %s\n", cfg.Retention.String())
 	fmt.Printf("           Acknowledgments: %v\n", !cfg.NoAck)
@@ -1708,6 +1700,14 @@ func (c *streamCmd) showStreamConfig(cfg api.StreamConfig) {
 		}
 	}
 
+	if cfg.RePublish != nil {
+		if cfg.RePublish.HeadersOnly {
+			fmt.Printf("      Republishing Headers: %s to %s", cfg.RePublish.Source, cfg.RePublish.Destination)
+		} else {
+			fmt.Printf("              Republishing: %s to %s", cfg.RePublish.Source, cfg.RePublish.Destination)
+		}
+	}
+
 	fmt.Println()
 }
 
@@ -1721,13 +1721,13 @@ func (c *streamCmd) renderSource(s *api.StreamSource) string {
 		parts = append(parts, fmt.Sprintf("Start Time: %v", s.OptStartTime))
 	}
 	if s.FilterSubject != "" {
-		parts = append(parts, fmt.Sprintf("Subject filter: %s", s.FilterSubject))
+		parts = append(parts, fmt.Sprintf("Filter: %s", s.FilterSubject))
 	}
 	if s.SubjectTransformDest != "" {
 		if s.FilterSubject == "" {
-			parts = append(parts, fmt.Sprintf("Subject filter: %s", ">"))
+			parts = append(parts, fmt.Sprintf("Filter: %s", ">"))
 		}
-		parts = append(parts, fmt.Sprintf("Subject transform: %s", s.SubjectTransformDest))
+		parts = append(parts, fmt.Sprintf("Transform: %s", s.SubjectTransformDest))
 	}
 	if s.External != nil {
 		if s.External.ApiPrefix != "" {
@@ -1811,14 +1811,14 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 
 		if s.SubjectTransformDest != "" {
 			if s.FilterSubject == "" {
-				fmt.Printf("            Subject Filter: %s\n", ">")
+				fmt.Printf("                    Filter: %s\n", ">")
 			} else {
-				fmt.Printf("            Subject Filter: %s\n", s.FilterSubject)
+				fmt.Printf("                    Filter: %s\n", s.FilterSubject)
 			}
-			fmt.Printf("         Subject Transform: %s \n", s.SubjectTransformDest)
+			fmt.Printf("                 Transform: %s \n", s.SubjectTransformDest)
 		} else {
 			if s.FilterSubject != "" {
-				fmt.Printf("            Subject Filter: %s\n", s.FilterSubject)
+				fmt.Printf("                    Filter: %s\n", s.FilterSubject)
 			}
 		}
 
@@ -1846,7 +1846,7 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 	}
 
 	if len(info.Sources) > 0 {
-		fmt.Println("Source Information:")
+		fmt.Println("Source State:")
 		fmt.Println()
 		for _, s := range info.Sources {
 			showSource(s)
@@ -2384,11 +2384,13 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 	}, &cfg.FilterSubject)
 	fisk.FatalIfError(err, "could not request filter")
 
-	err = askOne(&survey.Input{
-		Message: fmt.Sprintf("%s Subject mapping transform", prefix),
-		Help:    "Map matching subjects according to this transform destination",
-	}, &cfg.SubjectTransformDest)
-	fisk.FatalIfError(err, "could not request subject mapping destination transform")
+	if cfg.FilterSubject != "" {
+		err = askOne(&survey.Input{
+			Message: fmt.Sprintf("%s Subject mapping transform", prefix),
+			Help:    "Map matching subjects according to this transform destination",
+		}, &cfg.SubjectTransformDest)
+		fisk.FatalIfError(err, "could not request subject mapping destination transform")
+	}
 
 	ok, err = askConfirmation(fmt.Sprintf("Import %q from a different JetStream domain", name), false)
 	fisk.FatalIfError(err, "Could not request source details")
