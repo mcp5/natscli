@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"text/tabwriter"
 	"text/template"
 	"time"
 	"unicode"
@@ -39,11 +40,12 @@ import (
 	"github.com/choria-io/fisk"
 	"github.com/dustin/go-humanize"
 	"github.com/gosuri/uiprogress"
+	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/klauspost/compress/s2"
 	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nuid"
-	"github.com/xlab/tablewriter"
 	terminal "golang.org/x/term"
 
 	"github.com/nats-io/jsm.go"
@@ -148,7 +150,7 @@ func askOne(p survey.Prompt, response any, opts ...survey.AskOpt) error {
 		return fmt.Errorf("cannot prompt for user input without a terminal")
 	}
 
-	return survey.AskOne(p, response, opts...)
+	return survey.AskOne(p, response, append(surveyColors(), opts...)...)
 }
 
 func toJSON(d any) (string, error) {
@@ -746,6 +748,7 @@ func loadContext() error {
 		natscontext.WithJSAPIPrefix(opts.JsApiPrefix),
 		natscontext.WithJSDomain(opts.JsDomain),
 		natscontext.WithInboxPrefix(opts.InboxPrefix),
+		natscontext.WithColorScheme(opts.ColorScheme),
 	}
 
 	if opts.Username != "" && opts.Password == "" {
@@ -971,8 +974,7 @@ type raftLeader struct {
 }
 
 func renderRaftLeaders(leaders map[string]*raftLeader, grpTitle string) {
-	table := tablewriter.CreateTable()
-	table.AddTitle("RAFT Leader Report")
+	table := newTableWriter("RAFT Leader Report")
 	table.AddHeaders("Server", "Cluster", grpTitle, "Distribution")
 
 	var llist []*raftLeader
@@ -1059,14 +1061,19 @@ func compactStrings(source []string) []string {
 	return result
 }
 
-func newTableWriter(title string) *tablewriter.Table {
-	table := tablewriter.CreateTable()
-	table.UTF8Box()
+func newTableWriter(title string) *tbl {
+	tbl := &tbl{
+		writer: table.NewWriter(),
+	}
+	tbl.writer.SetStyle(styles[opts.Config.ColorScheme()])
+	tbl.writer.Style().Title.Align = text.AlignCenter
+	tbl.writer.Style().Format.Header = text.FormatDefault
+
 	if title != "" {
-		table.AddTitle(title)
+		tbl.writer.SetTitle(title)
 	}
 
-	return table
+	return tbl
 }
 
 func isPrintable(s string) bool {
@@ -1232,6 +1239,17 @@ func iterateStringsMap(data map[string]string, cb func(k string, v string)) {
 	}
 }
 
+// dumps strings into groups using  tabwriter, right aligned
+func dumpStrings(data []string, groups int, padding int) {
+	longest := longestString(data, 0)
+
+	tabw := tabwriter.NewWriter(os.Stdout, 1, longest, longest+padding, ' ', tabwriter.AlignRight)
+	sliceGroups(data, groups, func(grp []string) {
+		fmt.Fprint(tabw, strings.Join(grp, "\t"))
+	})
+	tabw.Flush()
+}
+
 // DumpMapStrings shows k: v of a map[string]string left padded by int, the k will be right aligned and value left aligned
 func dumpMapStrings(data map[string]string, leftPad int) {
 	longest := longestString(stringsMapKeys(data), 0) + leftPad
@@ -1261,4 +1279,28 @@ func longestString(list []string, max int) int {
 	}
 
 	return longest
+}
+
+func surveyColors() []survey.AskOpt {
+	return []survey.AskOpt{
+		survey.WithIcons(func(icons *survey.IconSet) {
+			switch opts.ColorScheme {
+			case "yellow_light", "yellow_dark":
+				icons.Question.Format = "yellow+hb"
+				icons.SelectFocus.Format = "yellow+hb"
+			case "blue_light", "blue_dark":
+				icons.Question.Format = "blue+hb"
+				icons.SelectFocus.Format = "blue+hb"
+			case "cyan_light", "cyan_dark":
+				icons.Question.Format = "cyan+hb"
+				icons.SelectFocus.Format = "cyan+hb"
+			case "magenta_light", "magenta_dark":
+				icons.Question.Format = "magenta+hb"
+				icons.SelectFocus.Format = "magenta+hb"
+			case "red_light", "red_dark":
+				icons.Question.Format = "red+hb"
+				icons.SelectFocus.Format = "red+hb"
+			}
+		}),
+	}
 }

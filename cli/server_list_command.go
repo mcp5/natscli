@@ -46,7 +46,7 @@ type srvListCluster struct {
 func configureServerListCommand(srv *fisk.CmdClause) {
 	c := &SrvLsCmd{}
 
-	ls := srv.Command("ls", "List known servers").Alias("list").Action(c.list)
+	ls := srv.Command("list", "List known servers").Alias("ls").Action(c.list)
 	ls.Arg("expect", "How many servers to expect").Uint32Var(&c.expect)
 	ls.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
 	ls.Flag("sort", "Sort servers by a specific key (name,conns,subs,routes,gws,mem,cpu,slow,uptime,rtt").Default("rtt").EnumVar(&c.sort, strings.Split("name,conns,conn,subs,sub,routes,route,gw,mem,cpu,slow,uptime,rtt", ",")...)
@@ -212,8 +212,7 @@ func (c *SrvLsCmd) list(_ *fisk.ParseContext) error {
 			ssm.rtt.Round(time.Millisecond))
 	}
 
-	table.AddSeparator()
-	table.AddRow(
+	table.AddFooter(
 		"",
 		len(clusters),
 		servers,
@@ -264,8 +263,8 @@ func (c *SrvLsCmd) showClusters(cl map[string]*srvListCluster) {
 		conns += c.conns
 		table.AddRow(c.name, len(c.nodes), c.gwOut, c.gwIn, c.conns)
 	}
-	table.AddSeparator()
-	table.AddRow("", nodes, out, in, conns)
+
+	table.AddFooter("", nodes, out, in, conns)
 
 	fmt.Print(table.Render())
 }

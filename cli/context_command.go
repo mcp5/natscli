@@ -14,15 +14,18 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"text/template"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/choria-io/fisk"
 	"github.com/fatih/color"
-
+	"github.com/ghodss/yaml"
 	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
 )
@@ -137,6 +140,78 @@ func (c *ctxCommand) copyCommand(pc *fisk.ParseContext) error {
 	return c.createCommand(pc)
 }
 
+var ctxYamlTemplate = `# Friendly description for this context shown when listing contexts
+description: {{ .Description | t }}
+
+# A comma separated list of NATS Servers to connect to
+url: {{ .ServerURL | t }}
+
+# Connect using a specific username, requires password to be set
+user: {{ .User | t }}
+password: {{ .Password | t }}
+
+# Connect using a NATS Credentials stored in a file
+creds: {{ .Creds | t }}
+
+# Connect using a NKey derived from a seedfile
+nkey: {{ .NKey | t }}
+
+# Configures a token to pass in the connection
+token: {{ .Token | t }}
+
+# Sets a x509 certificate to use, both cert and key should be set
+cert: {{ .Certificate | t }}
+key: {{ .Key | t }}
+
+# Sets an optional x509 trust chain to use
+ca: {{ .CA | t }}
+
+# Retrieves connection information from 'nsc'
+#
+# Example: nsc://Acme+Inc/HR/Automation
+nsc: {{ .NscURL | t }}
+
+# Use a custom inbox prefix
+#
+# Example : _INBOX.private.userid
+inbox_prefix: {{ .InboxPrefix | t }}
+
+# Sets a color scheme to use for the nats command line tool
+# this will influence table color choices allowing different
+# contexts to be visually distinguished.
+#
+# Valid values are:
+#
+#   rounded
+#   double
+#   bold
+#   bright
+#   dark, light
+#   blue_dark, blue_light
+#   cyan_dark, cyan_light
+#   green_dark, green_light
+#   magenta_dark, magenta_light
+#   red_dark, red_light
+#   yellow_dark, yellow_light
+#
+# When not set "rounded" is used
+color_scheme: {{ .ColorScheme | t }}
+
+# Connects to a specific JetStream domain
+jetstream_domain: {{ .JSDomain | t }}
+
+# Subject used as a prefix when accessing the JetStream API if imported from another account
+jetstream_api_prefix: {{ .JSAPIPrefix | t }}
+
+# Subject prefix used to access JetStream events if imported from another account
+jetstream_event_prefix: {{ .JSEventPrefix | t }}
+
+# Use a Socks5 proxy like ssh to connect to the NATS server URLS
+#
+# Example: socks5://example.net:1090
+socks_proxy: {{ .SocksProxy | t }}
+`
+
 func (c *ctxCommand) editCommand(pc *fisk.ParseContext) error {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -152,19 +227,37 @@ func (c *ctxCommand) editCommand(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	// we load and save here so that any fields added to the context
-	// structure after this context was initially created would also
-	// appear in the editor as empty fields
-	ctx, err := natscontext.New(c.name, true)
+	var ctx *natscontext.Context
+
+	ctx, err = natscontext.New(c.name, true)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid context, use --no-update to edit it without validation: %v", err)
 	}
-	err = ctx.Save(c.name)
+
+	tpl, err := template.New("context").Funcs(template.FuncMap{"t": func(s any) (string, error) {
+		res, err := yaml.Marshal(s)
+		if err != nil {
+			return "", err
+		}
+		return string(bytes.TrimRight(res, "\n")), nil
+	}}).Parse(ctxYamlTemplate)
 	if err != nil {
 		return err
 	}
 
-	cmd := exec.Command(editor, path)
+	f, err := os.CreateTemp("", "")
+	if err != nil {
+		return fmt.Errorf("could not create temporary copy to edit: %w", err)
+	}
+	defer f.Close()
+
+	err = tpl.ExecuteTemplate(f, "context", ctx)
+	if err != nil {
+		return fmt.Errorf("could not create temporary copy to edit: %w", err)
+	}
+	f.Close()
+
+	cmd := exec.Command(editor, f.Name())
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -174,11 +267,39 @@ func (c *ctxCommand) editCommand(pc *fisk.ParseContext) error {
 		return err
 	}
 
+	yctx, err := os.ReadFile(f.Name())
+	if err != nil {
+		return fmt.Errorf("could not read temporary copy: %w", err)
+	}
+
+	jctx, err := yaml.YAMLToJSON(yctx)
+	if err != nil {
+		return err
+	}
+	buff := bytes.NewBuffer([]byte{})
+	err = json.Indent(buff, jctx, "", "  ")
+	if err != nil {
+		return fmt.Errorf("could not format JSON output: %w", err)
+	}
+
+	err = os.Rename(path, path+".bak")
+	if err != nil {
+		return fmt.Errorf("could not create a backup of the context definition: %w", err)
+	}
+
+	err = os.WriteFile(path, buff.Bytes(), 0600)
+	if err != nil {
+		return fmt.Errorf("could not save the context: %w", err)
+	}
+
 	// There was an error with some data in the modified config
 	// Save the known clean version and show the error
 	err = c.showCommand(pc)
 	if err != nil {
-		ctx.Save(c.name)
+		if ctx != nil {
+			ctx.Save(c.name)
+		}
+
 		return fmt.Errorf("updated context validation failed - rolling back changes: %w", err)
 	}
 
@@ -294,6 +415,7 @@ func (c *ctxCommand) showCommand(_ *fisk.ParseContext) error {
 	c.showIfNotEmpty("        JS Domain: %s\n", cfg.JSDomain())
 	c.showIfNotEmpty("     Inbox Prefix: %s\n", cfg.InboxPrefix())
 	c.showIfNotEmpty("             Path: %s\n", cfg.Path())
+	c.showIfNotEmpty("     Color Scheme: %s\n", cfg.ColorScheme())
 
 	checkConn := func() error {
 		opts, err := cfg.NATSOptions()
@@ -359,6 +481,7 @@ func (c *ctxCommand) createCommand(pc *fisk.ParseContext) error {
 		natscontext.WithJSEventPrefix(opts.JsEventPrefix),
 		natscontext.WithJSDomain(opts.JsDomain),
 		natscontext.WithInboxPrefix(opts.InboxPrefix),
+		natscontext.WithColorScheme(opts.ColorScheme),
 	)
 	if err != nil {
 		return err
